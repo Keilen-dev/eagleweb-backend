@@ -4,20 +4,16 @@ const cors = require('cors');
 
 const app = express();
 
-// Middleware
 app.use(express.json());
 app.use(cors());
 
-// --- PRODUCTION DARAJA CREDENTIALS (Reading from Environment Variables) ---
 const consumerKey = process.env.CONSUMER_KEY;
 const consumerSecret = process.env.CONSUMER_SECRET;
 const businessShortCode = process.env.BUSINESS_SHORTCODE || '1286411'; 
 const passkey = process.env.PASSKEY;
 
-// Temporary memory store for tracking transaction results by CheckoutRequestID
 const transactionStatuses = {};
 
-// 1. Generate Live Safaricom Access Token Middleware
 async function getAccessToken(req, res, next) {
     const auth = Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64');
     try {
@@ -32,7 +28,6 @@ async function getAccessToken(req, res, next) {
     }
 }
 
-// 2. Live STK Push Endpoint for Till Number
 app.post('/api/stkpush', getAccessToken, async (req, res) => {
     try {
         const { phone, amount, courseName } = req.body;
@@ -56,18 +51,19 @@ app.post('/api/stkpush', getAccessToken, async (req, res) => {
 
         const callbackUrl = `https://eagleweb-backend.onrender.com/api/callback`;
 
+        // Clean payload strictly formatted for Production Buy Goods Till
         const stkPayload = {
             BusinessShortCode: businessShortCode,
             Password: password,
             Timestamp: timestamp,
-            TransactionType: 'CustomerBuyGoodsOnline', // <-- CORRECTED FOR TILL NUMBER
-            Amount: amount,
+            TransactionType: 'CustomerBuyGoodsOnline',
+            Amount: parseInt(amount, 10), // Must be a clean integer
             PartyA: formattedPhone,
-            PartyB: businessShortCode, // Till Number
+            PartyB: businessShortCode,
             PhoneNumber: formattedPhone,
             CallBackURL: callbackUrl,
-            AccountReference: 'Eagle Web Commerce',
-            TransactionDesc: `Payment for ${courseName}`
+            AccountReference: 'EagleWeb', // Max 12 chars, no spaces/special chars
+            TransactionDesc: `Training Payment`
         };
 
         const response = await axios.post(
@@ -95,7 +91,6 @@ app.post('/api/stkpush', getAccessToken, async (req, res) => {
     }
 });
 
-// 3. Safaricom Callback Endpoint
 app.post('/api/callback', (req, res) => {
     try {
         const callbackData = req.body.Body.stkCallback;
@@ -132,7 +127,6 @@ app.post('/api/callback', (req, res) => {
     }
 });
 
-// 4. Status Check Endpoint for Frontend
 app.get('/api/payment-status/:checkoutRequestId', (req, res) => {
     const { checkoutRequestId } = req.params;
     const tx = transactionStatuses[checkoutRequestId];
@@ -143,7 +137,6 @@ app.get('/api/payment-status/:checkoutRequestId', (req, res) => {
     return res.json(tx);
 });
 
-// Start Server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Live Server running on port ${PORT}`);
