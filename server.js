@@ -8,31 +8,31 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// --- DARAJA SANDBOX CREDENTIALS ---
+// --- PRODUCTION DARAJA CREDENTIALS (Reading from Environment Variables) ---
 const consumerKey = process.env.CONSUMER_KEY;
 const consumerSecret = process.env.CONSUMER_SECRET;
-const businessShortCode = process.env.BUSINESS_SHORTCODE || '174379'; 
-const passkey = process.env.PASSKEY || 'bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919';
+const businessShortCode = process.env.BUSINESS_SHORTCODE || '1286411'; 
+const passkey = process.env.PASSKEY;
 
 // Temporary memory store for tracking transaction results by CheckoutRequestID
 const transactionStatuses = {};
 
-// 1. Generate Safaricom Access Token Middleware
+// 1. Generate Live Safaricom Access Token Middleware
 async function getAccessToken(req, res, next) {
     const auth = Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64');
     try {
-        const response = await axios.get('https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials', {
+        const response = await axios.get('https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials', {
             headers: { 'Authorization': `Basic ${auth}` }
         });
         req.accessToken = response.data.access_token;
         next();
     } catch (error) {
         console.error('Access Token Error:', error.response?.data || error.message);
-        return res.status(500).json({ success: false, error: 'Failed to generate access token from Safaricom.' });
+        return res.status(500).json({ success: false, error: 'Failed to generate live access token from Safaricom.' });
     }
 }
 
-// 2. STK Push Endpoint
+// 2. Live STK Push Endpoint
 app.post('/api/stkpush', getAccessToken, async (req, res) => {
     try {
         const { phone, amount, courseName } = req.body;
@@ -54,7 +54,6 @@ app.post('/api/stkpush', getAccessToken, async (req, res) => {
 
         const password = Buffer.from(businessShortCode + passkey + timestamp).toString('base64');
 
-        // IMPORTANT: Replace with your actual live Render backend URL for the callback
         const callbackUrl = `https://eagleweb-backend.onrender.com/api/callback`;
 
         const stkPayload = {
@@ -72,7 +71,7 @@ app.post('/api/stkpush', getAccessToken, async (req, res) => {
         };
 
         const response = await axios.post(
-            'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest',
+            'https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest',
             stkPayload,
             {
                 headers: {
@@ -84,7 +83,6 @@ app.post('/api/stkpush', getAccessToken, async (req, res) => {
 
         if (response.data.ResponseCode === "0") {
             const checkoutRequestId = response.data.CheckoutRequestID;
-            // Mark initial state as pending
             transactionStatuses[checkoutRequestId] = { status: 'PENDING' };
             return res.status(200).json({ success: true, checkoutRequestId: checkoutRequestId });
         } else {
@@ -97,17 +95,16 @@ app.post('/api/stkpush', getAccessToken, async (req, res) => {
     }
 });
 
-// 3. Safaricom Callback Endpoint (Receives payment result when user enters PIN)
+// 3. Safaricom Callback Endpoint
 app.post('/api/callback', (req, res) => {
     try {
         const callbackData = req.body.Body.stkCallback;
         const checkoutRequestId = callbackData.CheckoutRequestID;
         const resultCode = callbackData.ResultCode;
 
-        console.log("Callback received for:", checkoutRequestId, "ResultCode:", resultCode);
+        console.log("Live Callback received for:", checkoutRequestId, "ResultCode:", resultCode);
 
         if (resultCode === 0) {
-            // Success! User entered PIN and money was paid.
             const metadata = callbackData.CallbackMetadata.Item;
             let mpesaReceiptNumber = "";
             
@@ -122,7 +119,6 @@ app.post('/api/callback', (req, res) => {
                 receipt: mpesaReceiptNumber
             };
         } else {
-            // User cancelled or failed
             transactionStatuses[checkoutRequestId] = {
                 status: 'FAILED',
                 message: callbackData.ResultDesc
@@ -150,5 +146,5 @@ app.get('/api/payment-status/:checkoutRequestId', (req, res) => {
 // Start Server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`Live Server running on port ${PORT}`);
 });
