@@ -6,22 +6,23 @@ const app = express();
 
 // Middleware
 app.use(express.json());
-app.use(cors()); // Enables cross-origin requests from your live Vercel website
+app.use(cors());
 
-// --- DARAJA SANDBOX CREDENTIALS (Reading from Environment Variables) ---
+// --- DARAJA SANDBOX CREDENTIALS ---
 const consumerKey = process.env.CONSUMER_KEY;
 const consumerSecret = process.env.CONSUMER_SECRET;
 const businessShortCode = process.env.BUSINESS_SHORTCODE || '174379'; 
 const passkey = process.env.PASSKEY || 'bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919';
 
-// 1. Generate Safaricom Access Token Middleware/Function
+// Temporary memory store for tracking transaction results by CheckoutRequestID
+const transactionStatuses = {};
+
+// 1. Generate Safaricom Access Token Middleware
 async function getAccessToken(req, res, next) {
     const auth = Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64');
     try {
         const response = await axios.get('https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials', {
-            headers: {
-                'Authorization': `Basic ${auth}`
-            }
+            headers: { 'Authorization': `Basic ${auth}` }
         });
         req.accessToken = response.data.access_token;
         next();
@@ -36,7 +37,6 @@ app.post('/api/stkpush', getAccessToken, async (req, res) => {
     try {
         const { phone, amount, courseName } = req.body;
 
-        // Format phone number to 254XXXXXXXXX
         let formattedPhone = phone.toString().trim();
         if (formattedPhone.startsWith('0')) {
             formattedPhone = '254' + formattedPhone.slice(1);
@@ -54,6 +54,9 @@ app.post('/api/stkpush', getAccessToken, async (req, res) => {
 
         const password = Buffer.from(businessShortCode + passkey + timestamp).toString('base64');
 
+        // IMPORTANT: Replace with your actual live Render backend URL for the callback
+        const callbackUrl = `https://eagleweb-backend.onrender.com/api/callback`;
+
         const stkPayload = {
             BusinessShortCode: businessShortCode,
             Password: password,
@@ -63,7 +66,7 @@ app.post('/api/stkpush', getAccessToken, async (req, res) => {
             PartyA: formattedPhone,
             PartyB: businessShortCode,
             PhoneNumber: formattedPhone,
-            CallBackURL: 'https://mydomain.com/path', // Sandbox callback URL placeholder
+            CallBackURL: callbackUrl,
             AccountReference: 'Eagle Web Commerce',
             TransactionDesc: `Payment for ${courseName}`
         };
@@ -79,9 +82,11 @@ app.post('/api/stkpush', getAccessToken, async (req, res) => {
             }
         );
 
-        // Verify that Safaricom officially accepted and triggered the push ("0" means success)
         if (response.data.ResponseCode === "0") {
-            return res.status(200).json({ success: true, data: response.data });
+            const checkoutRequestId = response.data.CheckoutRequestID;
+            // Mark initial state as pending
+            transactionStatuses[checkoutRequestId] = { status: 'PENDING' };
+            return res.status(200).json({ success: true, checkoutRequestId: checkoutRequestId });
         } else {
             return res.status(400).json({ success: false, error: response.data });
         }
@@ -90,6 +95,56 @@ app.post('/api/stkpush', getAccessToken, async (req, res) => {
         console.error('STK Push Error:', error.response?.data || error.message);
         return res.status(500).json({ success: false, error: error.response?.data || error.message });
     }
+});
+
+// 3. Safaricom Callback Endpoint (Receives payment result when user enters PIN)
+app.post('/api/callback', (req, res) => {
+    try {
+        const callbackData = req.body.Body.stkCallback;
+        const checkoutRequestId = callbackData.CheckoutRequestID;
+        const resultCode = callbackData.ResultCode;
+
+        console.log("Callback received for:", checkoutRequestId, "ResultCode:", resultCode);
+
+        if (resultCode === 0) {
+            // Success! User entered PIN and money was paid.
+            const metadata = callbackData.CallbackMetadata.Item;
+            let mpesaReceiptNumber = "";
+            
+            metadata.forEach(item => {
+                if (item.Name === "MpesaReceiptNumber") {
+                    mpesaReceiptNumber = item.Value;
+                }
+            });
+
+            transactionStatuses[checkoutRequestId] = {
+                status: 'SUCCESS',
+                receipt: mpesaReceiptNumber
+            };
+        } else {
+            // User cancelled or failed
+            transactionStatuses[checkoutRequestId] = {
+                status: 'FAILED',
+                message: callbackData.ResultDesc
+            };
+        }
+
+        res.status(200).json({ received: true });
+    } catch (error) {
+        console.error("Callback Error:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// 4. Status Check Endpoint for Frontend
+app.get('/api/payment-status/:checkoutRequestId', (req, res) => {
+    const { checkoutRequestId } = req.params;
+    const tx = transactionStatuses[checkoutRequestId];
+
+    if (!tx) {
+        return res.json({ status: 'PENDING' });
+    }
+    return res.json(tx);
 });
 
 // Start Server
