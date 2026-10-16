@@ -8,12 +8,11 @@ const app = express();
 app.use(express.json());
 app.use(cors()); // Enables cross-origin requests from your live Vercel website
 
-// --- DARAJA SANDBOX CREDENTIALS ---
-// Replace these with your exact Daraja Sandbox credentials if needed
-const consumerKey = 'YOUR_CONSUMER_KEY';
-const consumerSecret = 'YOUR_CONSUMER_SECRET';
-const businessShortCode = '174379'; // Standard Safaricom sandbox test shortcode
-const passkey = 'bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919'; // Standard Safaricom sandbox test passkey
+// --- DARAJA SANDBOX CREDENTIALS (Reading from Environment Variables) ---
+const consumerKey = process.env.CONSUMER_KEY;
+const consumerSecret = process.env.CONSUMER_SECRET;
+const businessShortCode = process.env.BUSINESS_SHORTCODE || '174379'; 
+const passkey = process.env.PASSKEY || 'bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919';
 
 // 1. Generate Safaricom Access Token Middleware/Function
 async function getAccessToken(req, res, next) {
