@@ -32,7 +32,7 @@ async function getAccessToken(req, res, next) {
     }
 }
 
-// 2. Live STK Push Endpoint
+// 2. Live STK Push Endpoint for Till Number
 app.post('/api/stkpush', getAccessToken, async (req, res) => {
     try {
         const { phone, amount, courseName } = req.body;
@@ -60,10 +60,10 @@ app.post('/api/stkpush', getAccessToken, async (req, res) => {
             BusinessShortCode: businessShortCode,
             Password: password,
             Timestamp: timestamp,
-            TransactionType: 'CustomerPayBillOnline',
+            TransactionType: 'CustomerBuyGoodsOnline', // <-- CORRECTED FOR TILL NUMBER
             Amount: amount,
             PartyA: formattedPhone,
-            PartyB: businessShortCode,
+            PartyB: businessShortCode, // Till Number
             PhoneNumber: formattedPhone,
             CallBackURL: callbackUrl,
             AccountReference: 'Eagle Web Commerce',
