@@ -79,7 +79,13 @@ app.post('/api/stkpush', getAccessToken, async (req, res) => {
             }
         );
 
-        return res.status(200).json({ success: true, data: response.data });
+        // Verify that Safaricom officially accepted and triggered the push ("0" means success)
+        if (response.data.ResponseCode === "0") {
+            return res.status(200).json({ success: true, data: response.data });
+        } else {
+            return res.status(400).json({ success: false, error: response.data });
+        }
+
     } catch (error) {
         console.error('STK Push Error:', error.response?.data || error.message);
         return res.status(500).json({ success: false, error: error.response?.data || error.message });
