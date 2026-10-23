@@ -65,7 +65,7 @@ app.post('/api/verify-payment', (req, res) => {
     if (!smsRecord) {
         return res.status(400).json({ 
             success: false, 
-            message: "Transaction ID not found. If you just paid, wait a few seconds and try again." 
+            message: "Transaction ID not found yet. If you just paid, wait a few seconds and try again." 
         });
     }
 
