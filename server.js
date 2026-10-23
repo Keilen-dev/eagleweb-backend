@@ -1,12 +1,14 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const path = require('path');
+const cors = require('cors');
 
 const app = express();
 app.use(bodyParser.json());
+app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// In-memory data storage (Use MongoDB, PostgreSQL, or Supabase for a production database)
+// In-memory data storage (Use MongoDB or PostgreSQL for persistent production databases)
 let smsLogs = []; 
 let activePasses = []; 
 
@@ -48,21 +50,22 @@ app.post('/api/incoming-sms', (req, res) => {
 
 /**
  * 2. PAYMENT VERIFICATION ROUTE
- * Called automatically when the user submits their transaction ID on the website modal
+ * Validates the transaction ID and ensures the amount matches the selected package price
  */
 app.post('/api/verify-payment', (req, res) => {
-    const { userPhone, transactionId, expectedAmount } = req.body;
+    const { userPhone, transactionId, expectedAmount, packageName } = req.body;
 
-    if (!userPhone || !transactionId) {
-        return res.status(400).json({ success: false, message: "Missing phone number or transaction ID." });
+    if (!userPhone || !transactionId || !expectedAmount) {
+        return res.status(400).json({ success: false, message: "Missing required payment details." });
     }
 
-    const smsRecord = smsLogs.find(log => log.transactionId === transactionId);
+    const cleanTxId = transactionId.trim().toUpperCase();
+    const smsRecord = smsLogs.find(log => log.transactionId === cleanTxId);
 
     if (!smsRecord) {
         return res.status(400).json({ 
             success: false, 
-            message: "Transaction ID not found. If you just paid, wait a few seconds and try again." 
+            message: "Transaction ID not found. If you just paid, wait 5 seconds and try again." 
         });
     }
 
@@ -70,8 +73,12 @@ app.post('/api/verify-payment', (req, res) => {
         return res.status(400).json({ success: false, message: "This transaction ID has already been used." });
     }
 
+    // Check if paid amount matches the package price
     if (smsRecord.amount < expectedAmount) {
-        return res.status(400).json({ success: false, message: `Amount mismatch. Expected KES ${expectedAmount}, found KES ${smsRecord.amount}.` });
+        return res.status(400).json({ 
+            success: false, 
+            message: `Amount mismatch! Expected KES ${expectedAmount} for ${packageName}, but found KES ${smsRecord.amount}.` 
+        });
     }
 
     // Mark code as spent so it cannot be reused
@@ -80,16 +87,17 @@ app.post('/api/verify-payment', (req, res) => {
     // Grant ticket pass access
     activePasses.push({
         userPhone,
-        transactionId,
+        packageName,
+        transactionId: cleanTxId,
         amount: smsRecord.amount,
         grantedAt: new Date()
     });
 
-    console.log(`[PASS GRANTED] Phone: ${userPhone} for Code: ${transactionId}`);
+    console.log(`[PASS GRANTED] Phone: ${userPhone} for Package: ${packageName} (Code: ${cleanTxId})`);
 
     return res.json({ 
         success: true, 
-        message: "Payment verified successfully!" 
+        message: "Payment verified successfully! Access granted." 
     });
 });
 
