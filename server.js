@@ -1,143 +1,99 @@
 const express = require('express');
-const axios = require('axios');
-const cors = require('cors');
+const bodyParser = require('body-parser');
+const path = require('path');
 
 const app = express();
+app.use(bodyParser.json());
+app.use(express.static(path.join(__dirname, 'public')));
 
-app.use(express.json());
-app.use(cors());
+// In-memory records (Use a persistent database like MongoDB or PostgreSQL for production)
+let smsLogs = []; 
+let activePasses = []; 
 
-const consumerKey = process.env.CONSUMER_KEY;
-const consumerSecret = process.env.CONSUMER_SECRET;
-const businessShortCode = process.env.BUSINESS_SHORTCODE || '1286411'; 
-const passkey = process.env.PASSKEY;
+/**
+ * 1. INBOUND SMS WEBHOOK ROUTE
+ * Receives forwarded SMS payloads from your Android SMS Gateway app
+ */
+app.post('/api/incoming-sms', (req, res) => {
+    const { message, sender } = req.body; 
 
-const transactionStatuses = {};
+    if (sender && sender.toUpperCase().includes('MPESA') && message) {
+        // Extracts the 10-character alphanumeric transaction ID and amount
+        const codeMatch = message.match(/^([A-Z0-9]{10})/); 
+        const amountMatch = message.match(/Ksh([0-9,.]+)/i); 
+        
+        // Validates that the money went to your specific Till (1756916) or name
+        const isTargetTill = message.includes('1756916') || message.toLowerCase().includes('cephas mutahi');
 
-async function getAccessToken(req, res, next) {
-    const auth = Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64');
-    try {
-        const response = await axios.get('https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials', {
-            headers: { 'Authorization': `Basic ${auth}` }
-        });
-        req.accessToken = response.data.access_token;
-        next();
-    } catch (error) {
-        console.error('Access Token Error:', error.response?.data || error.message);
-        return res.status(500).json({ success: false, error: 'Failed to generate live access token from Safaricom.' });
-    }
-}
+        if (codeMatch && amountMatch && isTargetTill) {
+            const transactionId = codeMatch[1];
+            const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
 
-app.post('/api/stkpush', getAccessToken, async (req, res) => {
-    try {
-        const { phone, amount, courseName } = req.body;
-
-        let formattedPhone = phone.toString().trim();
-        if (formattedPhone.startsWith('0')) {
-            formattedPhone = '254' + formattedPhone.slice(1);
-        } else if (formattedPhone.startsWith('+')) {
-            formattedPhone = formattedPhone.slice(1);
-        }
-
-        const date = new Date();
-        const timestamp = date.getFullYear() +
-            String(date.getMonth() + 1).padStart(2, '0') +
-            String(date.getDate()).padStart(2, '0') +
-            String(date.getHours()).padStart(2, '0') +
-            String(date.getMinutes()).padStart(2, '0') +
-            String(date.getSeconds()).padStart(2, '0');
-
-        const password = Buffer.from(businessShortCode + passkey + timestamp).toString('base64');
-
-        const callbackUrl = `https://eagleweb-backend.onrender.com/api/callback`;
-
-        // Clean payload strictly formatted for Production Buy Goods Till
-        const stkPayload = {
-            BusinessShortCode: businessShortCode,
-            Password: password,
-            Timestamp: timestamp,
-            TransactionType: 'CustomerBuyGoodsOnline',
-            Amount: parseInt(amount, 10), // Must be a clean integer
-            PartyA: formattedPhone,
-            PartyB: businessShortCode,
-            PhoneNumber: formattedPhone,
-            CallBackURL: callbackUrl,
-            AccountReference: 'EagleWeb', // Max 12 chars, no spaces/special chars
-            TransactionDesc: `Training Payment`
-        };
-
-        const response = await axios.post(
-            'https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest',
-            stkPayload,
-            {
-                headers: {
-                    'Authorization': `Bearer ${req.accessToken}`,
-                    'Content-Type': 'application/json'
-                }
+            const exists = smsLogs.some(log => log.transactionId === transactionId);
+            if (!exists) {
+                smsLogs.push({
+                    transactionId,
+                    amount,
+                    fullMessage: message,
+                    isUsed: false,
+                    timestamp: new Date()
+                });
+                console.log(`[TILL PAYMENT LOGGED] ID: ${transactionId}, Amount: ${amount}`);
             }
-        );
-
-        if (response.data.ResponseCode === "0") {
-            const checkoutRequestId = response.data.CheckoutRequestID;
-            transactionStatuses[checkoutRequestId] = { status: 'PENDING' };
-            return res.status(200).json({ success: true, checkoutRequestId: checkoutRequestId });
-        } else {
-            return res.status(400).json({ success: false, error: response.data });
         }
-
-    } catch (error) {
-        console.error('STK Push Error:', error.response?.data || error.message);
-        return res.status(500).json({ success: false, error: error.response?.data || error.message });
     }
+
+    res.status(200).json({ status: 'received' });
 });
 
-app.post('/api/callback', (req, res) => {
-    try {
-        const callbackData = req.body.Body.stkCallback;
-        const checkoutRequestId = callbackData.CheckoutRequestID;
-        const resultCode = callbackData.ResultCode;
+/**
+ * 2. PAYMENT VERIFICATION ROUTE
+ * Called automatically when the user submits their transaction ID on the website
+ */
+app.post('/api/verify-payment', (req, res) => {
+    const { userPhone, transactionId, expectedAmount } = req.body;
 
-        console.log("Live Callback received for:", checkoutRequestId, "ResultCode:", resultCode);
-
-        if (resultCode === 0) {
-            const metadata = callbackData.CallbackMetadata.Item;
-            let mpesaReceiptNumber = "";
-            
-            metadata.forEach(item => {
-                if (item.Name === "MpesaReceiptNumber") {
-                    mpesaReceiptNumber = item.Value;
-                }
-            });
-
-            transactionStatuses[checkoutRequestId] = {
-                status: 'SUCCESS',
-                receipt: mpesaReceiptNumber
-            };
-        } else {
-            transactionStatuses[checkoutRequestId] = {
-                status: 'FAILED',
-                message: callbackData.ResultDesc
-            };
-        }
-
-        res.status(200).json({ received: true });
-    } catch (error) {
-        console.error("Callback Error:", error);
-        res.status(500).json({ error: error.message });
+    if (!userPhone || !transactionId) {
+        return res.status(400).json({ success: false, message: "Missing phone number or transaction ID." });
     }
-});
 
-app.get('/api/payment-status/:checkoutRequestId', (req, res) => {
-    const { checkoutRequestId } = req.params;
-    const tx = transactionStatuses[checkoutRequestId];
+    const smsRecord = smsLogs.find(log => log.transactionId === transactionId);
 
-    if (!tx) {
-        return res.json({ status: 'PENDING' });
+    if (!smsRecord) {
+        return res.status(400).json({ 
+            success: false, 
+            message: "Transaction ID not found. If you just paid, wait a few seconds and try again." 
+        });
     }
-    return res.json(tx);
+
+    if (smsRecord.isUsed) {
+        return res.status(400).json({ success: false, message: "This transaction ID has already been used." });
+    }
+
+    if (smsRecord.amount < expectedAmount) {
+        return res.status(400).json({ success: false, message: `Amount mismatch. Expected KES ${expectedAmount}, found KES ${smsRecord.amount}.` });
+    }
+
+    // Mark code as spent so it cannot be reused
+    smsRecord.isUsed = true;
+
+    // Grant ticket pass access
+    activePasses.push({
+        userPhone,
+        transactionId,
+        amount: smsRecord.amount,
+        grantedAt: new Date()
+    });
+
+    console.log(`[PASS GRANTED] Phone: ${userPhone} for Code: ${transactionId}`);
+
+    return res.json({ 
+        success: true, 
+        message: "Payment verified successfully!" 
+    });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Live Server running on port ${PORT}`);
+    console.log(`Server running on port ${PORT}`);
 });
