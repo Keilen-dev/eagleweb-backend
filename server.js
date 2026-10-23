@@ -6,7 +6,7 @@ const app = express();
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// In-memory records (Use a persistent database like MongoDB or PostgreSQL for production)
+// In-memory data storage (Use MongoDB, PostgreSQL, or Supabase for a persistent database in production)
 let smsLogs = []; 
 let activePasses = []; 
 
@@ -48,7 +48,7 @@ app.post('/api/incoming-sms', (req, res) => {
 
 /**
  * 2. PAYMENT VERIFICATION ROUTE
- * Called automatically when the user submits their transaction ID on the website
+ * Called automatically when the user submits their transaction ID on the website modal
  */
 app.post('/api/verify-payment', (req, res) => {
     const { userPhone, transactionId, expectedAmount } = req.body;
