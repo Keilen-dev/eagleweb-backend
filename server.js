@@ -6,7 +6,7 @@ const app = express();
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// In-memory data storage (Use MongoDB, PostgreSQL, or Supabase for a persistent database in production)
+// In-memory data storage (Use MongoDB, PostgreSQL, or Supabase for a production database)
 let smsLogs = []; 
 let activePasses = []; 
 
